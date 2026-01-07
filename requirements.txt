@@ -1,0 +1,13 @@
+pandas
+numpy
+scikit-learn
+matplotlib
+plotly
+streamlit
+yfinance
+pandas-ta
+openai
+python-dotenv
+requests
+langfuse
+xhtml2pdf
