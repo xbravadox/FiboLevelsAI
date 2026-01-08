@@ -1,15 +1,31 @@
 import yfinance as yf
+import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 def fetch_ticker_data(ticker, period='5y', interval='1d'):
-    '''Pobiera dane dla pojedynczego tickera w izolacji.'''
+    '''Pobiera dane dla pojedynczego tickera i oblicza wskaźniki.'''
     try:
-        # Dodajemy group_by='ticker' i wątek pobiera tylko JEDEN ticker
         ticker_obj = yf.Ticker(ticker)
         data = ticker_obj.history(period=period, interval=interval)
         
         if data.empty:
             return ticker, None
+        
+        # OBLICZENIE SMA 200 (na czystym DataFrame)
+        data['SMA200'] = data['Close'].rolling(window=200).mean()
+        
+        # Weryfikacja trendu
+        if len(data) >= 200:
+            last_close = data['Close'].iloc[-1]
+            last_sma200 = data['SMA200'].iloc[-1]
+            
+            # Przypisanie atrybutów trendu
+            data.attrs['is_bullish'] = last_close > last_sma200 if pd.notna(last_sma200) else False
+            data.attrs['sma200_val'] = last_sma200
+        else:
+            data.attrs['is_bullish'] = False
+            data.attrs['sma200_val'] = None
+
         return ticker, data
     except Exception:
         return ticker, None
