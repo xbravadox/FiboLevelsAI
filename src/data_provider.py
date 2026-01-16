@@ -1,33 +1,29 @@
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# =============================================================================
+# SEKCHJA 1: LOGIKA FIBONACCIEGO I KLASTRÓW (EPIC 1)
+# =============================================================================
 
 def get_fib_levels(start_price, end_price, start_date):
-    '''
-    Wylicza poziomy Fibo dla konkretnego impulsu.
-    Dodajemy wagę (weight) do każdego poziomu, aby zróżnicować ich znaczenie.
-    '''
+    '''Wylicza poziomy Fibo dla konkretnego impulsu z wagami.'''
     diff = end_price - start_price
     return {
         '38.2%': {'price': end_price - diff * 0.382, 'date': start_date, 'weight': 1.0},
         '50.0%': {'price': end_price - diff * 0.500, 'date': start_date, 'weight': 1.2},
-        '61.8%': {'price': end_price - diff * 0.618, 'date': start_date, 'weight': 1.5}, # Złote cięcie
-        '78.6%': {'price': end_price - diff * 0.786, 'date': start_date, 'weight': 1.5}  # Głębokie zniesienie
+        '61.8%': {'price': end_price - diff * 0.618, 'date': start_date, 'weight': 1.5},
+        '78.6%': {'price': end_price - diff * 0.786, 'date': start_date, 'weight': 1.5}
     }
 
 def find_clusters(structure):
-    '''
-    Szuka klastrów, agreguje bliskie poziomy w strefy i nadaje im wagę.
-    Poprawiona precyzja: agresywniejsze filtrowanie szerokości stref.
-    '''
+    '''Szuka klastrów i agreguje poziomy w strefy.'''
     all_levels = []
     hh_price = structure['hh']['price']
     
     for hl in structure['hls']:
         levels_dict = get_fib_levels(hl['price'], hh_price, hl['date'])
         for name, data in levels_dict.items():
-            # Wynik poziomu to bazowy score dołka * waga poziomu Fibo
             level_score = hl.get('score', 1.0) * data['weight']
             all_levels.append({
                 'price': data['price'], 
@@ -39,7 +35,6 @@ def find_clusters(structure):
     
     all_levels.sort(key=lambda x: x['price'])
     
-    # 1. Tworzenie bazowych klastrów (bardzo ciasne skupiska < 0.5%)
     clusters = []
     i = 0
     while i < len(all_levels):
@@ -52,13 +47,10 @@ def find_clusters(structure):
         if len(current_cluster) >= 2:
             avg_price = sum(c['price'] for c in current_cluster) / len(current_cluster)
             total_score = sum(c['score'] for c in current_cluster)
-            min_p = min(c['price'] for c in current_cluster)
-            max_p = max(c['price'] for c in current_cluster)
-            
             clusters.append({
                 'avg_price': avg_price,
-                'min_price': min_p,
-                'max_price': max_p,
+                'min_price': min(c['price'] for c in current_cluster),
+                'max_price': max(c['price'] for c in current_cluster),
                 'count': len(current_cluster),
                 'total_score': total_score,
                 'levels': sorted(current_cluster, key=lambda x: x['date'])
@@ -67,40 +59,32 @@ def find_clusters(structure):
 
     if not clusters: return []
     
-    # 2. AGREGACJA W STREFY (zredukowano z 2% do 1.2% dla lepszej precyzji)
     zones = []
     clusters.sort(key=lambda x: x['avg_price'])
-    
     i = 0
     while i < len(clusters):
         current_zone = [clusters[i]]
         j = i + 1
-        # 1.2% to kompromis między precyzją a łączeniem istotnych punktów
         while j < len(clusters) and (clusters[j]['avg_price'] - clusters[i]['avg_price']) / clusters[i]['avg_price'] < 0.012:
             current_zone.append(clusters[j])
             j += 1
         
         z_min = min(c['min_price'] for c in current_zone)
         z_max = max(c['max_price'] for c in current_zone)
-        z_avg = (z_min + z_max) / 2
-        z_score = sum(c['total_score'] for c in current_zone)
-        z_count = sum(c['count'] for c in current_zone)
-        
-        z_levels = []
-        for c in current_zone:
-            z_levels.extend(c['levels'])
-        
         zones.append({
-            'avg_price': z_avg,
+            'avg_price': (z_min + z_max) / 2,
             'min_price': z_min,
             'max_price': z_max,
-            'total_score': z_score,
-            'total_count': z_count,
-            'levels': sorted(z_levels, key=lambda x: x['price'])
+            'total_score': sum(c['total_score'] for c in current_zone),
+            'total_count': sum(c['count'] for c in current_zone),
+            'levels': sorted([lvl for c in current_zone for lvl in c['levels']], key=lambda x: x['price'])
         })
         i = j
-        
     return sorted(zones, key=lambda x: x['total_score'], reverse=True)
+
+# =============================================================================
+# SEKCHJA 2: ANALIZA STRUKTURY I WYCKOFF EFFORT
+# =============================================================================
 
 def find_all_significant_lows(df):
     '''Szukanie dołków z analizą Wyckoffa i resetem struktury.'''
@@ -113,7 +97,7 @@ def find_all_significant_lows(df):
     df['Eff_MA20'] = df['Effort_Ratio'].rolling(20).mean()
     
     yearly_df = df.tail(252)
-    hh_val = yearly_df['High'].max()
+    hh_val = float(yearly_df['High'].max())
     hh_idx = yearly_df['High'].idxmax()
     hh_pos = df.index.get_loc(hh_idx)
     
@@ -121,14 +105,11 @@ def find_all_significant_lows(df):
     candidates = []
 
     for i in range(search_start + 8, hh_pos - 5):
-        low_val = df['Low'].iloc[i]
+        low_val = float(df['Low'].iloc[i])
         if low_val == df['Low'].iloc[i-8:i+9].min():
             v_score = 1.0
-            # Premia za wolumen (Wyckoff Effort)
-            if df['Volume'].iloc[i] > df['Vol_MA20'].iloc[i] * 1.5:
-                v_score += 1.0
-            if df['Effort_Ratio'].iloc[i] > df['Eff_MA20'].iloc[i] * 2.0:
-                v_score += 1.0
+            if df['Volume'].iloc[i] > df['Vol_MA20'].iloc[i] * 1.5: v_score += 1.0
+            if df['Effort_Ratio'].iloc[i] > df['Eff_MA20'].iloc[i] * 2.0: v_score += 1.0
             
             recent_high = df['High'].iloc[i-15:i].max()
             future_window = df.iloc[i:min(i+35, hh_pos)]
@@ -144,55 +125,76 @@ def find_all_significant_lows(df):
         if not final_hls or (c['date'] - final_hls[-1]['date']).days > 20:
             final_hls.append(c)
         else:
-            if c['price'] < final_hls[-1]['price']:
-                final_hls[-1] = c
+            if c['price'] < final_hls[-1]['price']: final_hls[-1] = c
 
     significant_lows = [l for l in final_hls if (hh_val - l['price']) / l['price'] >= 0.10]
     return {'hh': {'date': hh_idx, 'price': hh_val}, 'hls': significant_lows}
 
+# =============================================================================
+# SEKCHJA 3: POBIERANIE DANYCH I FILTRY (FA-43, FA-44, FA-45)
+# =============================================================================
+
 def fetch_ticker_data(ticker, period='2y', interval='1d'):
     try:
-        data = yf.Ticker(ticker).history(period=period, interval=interval)
+        # FA-44: Walidacja trendu na interwale tygodniowym
+        if interval == '1d':
+            w_data = yf.download(ticker, period='5y', interval='1wk', progress=False)
+            if not w_data.empty and len(w_data) >= 200:
+                if isinstance(w_data.columns, pd.MultiIndex):
+                    w_data.columns = w_data.columns.get_level_values(0)
+                
+                # Ręczne liczenie SMA 200 dla tygodniówki
+                w_sma200 = w_data['Close'].rolling(window=200).mean().iloc[-1]
+                if float(w_data['Close'].iloc[-1]) < float(w_sma200):
+                    return ticker, None
+
+        # Pobieranie danych głównych
+        data = yf.download(ticker, period=period, interval=interval, progress=False)
         if data.empty: return ticker, None
+        
         if isinstance(data.columns, pd.MultiIndex):
             data.columns = data.columns.get_level_values(0)
             
         struct = find_all_significant_lows(data)
         if struct:
             struct['clusters'] = find_clusters(struct)
-            
-            # --- WYZNACZANIE TRENDU I SYGNAŁÓW ---
             last_close = float(data['Close'].iloc[-1])
-            sma200 = data['Close'].rolling(window=200).mean().iloc[-1]
             
-            # 1. Trend (tylko dla informacji, skanujemy i tak wszystko pod kątem stref)
-            struct['trend'] = 'Wzrostowy' if last_close > sma200 else 'Spadkowy'
+            # FA-21/FA-43: SMA 200 (liczone ręcznie)
+            sma200_series = data['Close'].rolling(window=200).mean()
+            if sma200_series.isna().iloc[-1]: return ticker, None
+            sma200 = float(sma200_series.iloc[-1])
             
-            # 2. Sygnały
+            if last_close < sma200:
+                return ticker, None
+            
+            # FA-45: ATR 14 (liczone ręcznie)
+            high_low = data['High'] - data['Low']
+            high_pc = abs(data['High'] - data['Close'].shift())
+            low_pc = abs(data['Low'] - data['Close'].shift())
+            tr = pd.concat([high_low, high_pc, low_pc], axis=1).max(axis=1)
+            struct['atr'] = float(tr.rolling(window=14).mean().iloc[-1])
+            
+            struct['trend'] = 'Wzrostowy'
+
+            # Generowanie sygnałów
             signals = []
             active_zones = [z for z in struct['clusters'] if z['avg_price'] < last_close]
             
             if active_zones:
                 main_z = active_zones[0]
                 dist = (last_close - main_z['avg_price']) / last_close * 100
-                
-                # Dynamiczna ocena jakości strefy
-                if main_z['total_score'] >= 8: status = "EKSTREMALNA (BETON)"
-                elif main_z['total_score'] >= 5: status = "BARDZO SILNA"
-                else: status = "STANDARDOWA"
-                
+                status = 'EKSTREMALNA' if main_z['total_score'] >= 8 else 'SILNA' if main_z['total_score'] >= 5 else 'STANDARDOWA'
                 signals.append(f"Najbliższa strefa: {main_z['avg_price']:.2f} ({status})")
-                signals.append(f"Dystans do wsparcia: {dist:.1f}%")
-                
-                # Szczegóły techniczne
-                fibo_names = [l['type'] for l in main_z['levels'][:3]]
-                signals.append(f"Główne poziomy: {', '.join(set(fibo_names))}")
+                signals.append(f"Dystans: {dist:.1f}%")
+                fibo_names = {l['type'] for l in main_z['levels']}
+                signals.append(f"Poziomy: {', '.join(fibo_names)}")
             else:
-                signals.append("Brak aktywnych stref wsparcia poniżej ceny.")
+                signals.append('Brak aktywnych stref wsparcia.')
             
             struct['signals'] = signals
+            data.attrs['structure'] = struct
             
-        data.attrs['structure'] = struct
         return ticker, data
     except Exception as e:
         return ticker, None
