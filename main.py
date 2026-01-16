@@ -107,7 +107,7 @@ def main():
             
         st.divider()
 
-        no_zones = [] # Listy na potrzeby precyzyjnego raportowania pod kartami
+        no_zones = []
         low_prob = []
 
         # 1. NAJPIERW: Wyświetlanie kart dla zaakceptowanych spółek
@@ -152,16 +152,13 @@ def main():
         # 2. NA KONIEC: Zbiorcze raporty pod kartami
         st.divider()
         
-        # Trend spadkowy (to co odrzucił fetch_ticker_data)
         rejected = [t for t, res in results.items() if res[1] is None]
         if rejected:
             st.warning(f"📉 **Trend spadkowy (SMA200 D1/W1):** {', '.join(rejected)}")
         
-        # Brak stref pod ceną
         if no_zones:
             st.info(f"🔍 **Brak stref Fibo poniżej ceny:** {', '.join(no_zones)}")
             
-        # Zbyt niskie prawdopodobieństwo względem suwaka
         if low_prob:
             st.info(f"⚖️ **Zbyt niskie prawdopodobieństwo:** {', '.join(low_prob)}")
             

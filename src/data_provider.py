@@ -131,7 +131,7 @@ def find_all_significant_lows(df):
     return {'hh': {'date': hh_idx, 'price': hh_val}, 'hls': significant_lows}
 
 # =============================================================================
-# SEKCHJA 3: POBIERANIE DANYCH I FILTRY (FA-43, FA-44, FA-45)
+# SEKCHJA 3: POBIERANIE DANYCH I FILTRY (FA-42: FA-43 do FA-49)
 # =============================================================================
 
 def fetch_ticker_data(ticker, period='2y', interval='1d'):
@@ -143,7 +143,6 @@ def fetch_ticker_data(ticker, period='2y', interval='1d'):
                 if isinstance(w_data.columns, pd.MultiIndex):
                     w_data.columns = w_data.columns.get_level_values(0)
                 
-                # Ręczne liczenie SMA 200 dla tygodniówki
                 w_sma200 = w_data['Close'].rolling(window=200).mean().iloc[-1]
                 if float(w_data['Close'].iloc[-1]) < float(w_sma200):
                     return ticker, None
@@ -160,7 +159,7 @@ def fetch_ticker_data(ticker, period='2y', interval='1d'):
             struct['clusters'] = find_clusters(struct)
             last_close = float(data['Close'].iloc[-1])
             
-            # FA-21/FA-43: SMA 200 (liczone ręcznie)
+            # FA-21/FA-43: SMA 200
             sma200_series = data['Close'].rolling(window=200).mean()
             if sma200_series.isna().iloc[-1]: return ticker, None
             sma200 = float(sma200_series.iloc[-1])
@@ -168,25 +167,56 @@ def fetch_ticker_data(ticker, period='2y', interval='1d'):
             if last_close < sma200:
                 return ticker, None
             
-            # FA-45: ATR 14 (liczone ręcznie)
+            # --- FEATURE ENGINEERING (FA-42) ---
+            
+            # FA-45: ATR 14
             high_low = data['High'] - data['Low']
             high_pc = abs(data['High'] - data['Close'].shift())
             low_pc = abs(data['Low'] - data['Close'].shift())
             tr = pd.concat([high_low, high_pc, low_pc], axis=1).max(axis=1)
-            struct['atr'] = float(tr.rolling(window=14).mean().iloc[-1])
+            atr_val = float(tr.rolling(window=14).mean().iloc[-1])
+
+            # FA-46: RSI 14
+            delta = data['Close'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+            rs = gain / loss
+            rsi_val = float(100 - (100 / (1 + rs)).iloc[-1])
+
+            # FA-47: Odległość od SMA 200 (%)
+            dist_val = float((last_close - sma200) / sma200 * 100)
+
+            # FA-48: Nachylenie SMA 200
+            slope_val = 0.0
+            if len(sma200_series) >= 6:
+                prev_sma200 = float(sma200_series.iloc[-6])
+                slope_val = float((sma200 - prev_sma200) / prev_sma200 * 100)
+
+            # FA-49: Budowa wektora danych (Dataset Builder) - Zoptymalizowana precyzja
+            struct['data_vector'] = {
+                'ticker': ticker,
+                'last_price': round(last_close, 2),
+                'sma200': round(sma200, 2),
+                'sma200_dist_pct': round(dist_val, 2),
+                'sma200_slope_pct': round(slope_val, 4),
+                'rsi_14': round(rsi_val, 2),
+                'atr_14': round(atr_val, 2),
+                'n_hls': len(struct['hls']),
+                'max_cluster_score': round(struct['clusters'][0]['total_score'], 1) if struct['clusters'] else 0
+            }
             
             struct['trend'] = 'Wzrostowy'
 
-            # Generowanie sygnałów
+            # Generowanie sygnałów do UI
             signals = []
             active_zones = [z for z in struct['clusters'] if z['avg_price'] < last_close]
             
             if active_zones:
                 main_z = active_zones[0]
-                dist = (last_close - main_z['avg_price']) / last_close * 100
+                dist_to_fibo = (last_close - main_z['avg_price']) / last_close * 100
                 status = 'EKSTREMALNA' if main_z['total_score'] >= 8 else 'SILNA' if main_z['total_score'] >= 5 else 'STANDARDOWA'
                 signals.append(f"Najbliższa strefa: {main_z['avg_price']:.2f} ({status})")
-                signals.append(f"Dystans: {dist:.1f}%")
+                signals.append(f"Dystans: {dist_to_fibo:.1f}%")
                 fibo_names = {l['type'] for l in main_z['levels']}
                 signals.append(f"Poziomy: {', '.join(fibo_names)}")
             else:
